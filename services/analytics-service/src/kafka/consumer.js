@@ -1,5 +1,6 @@
 const { Kafka } = require('kafkajs');
 const OrderEvent = require('../models/OrderEvent');
+const { kafkaMessagesProcessedTotal } = require('../metrics');
 
 const kafka = new Kafka({
   clientId: 'analytics-service',
@@ -11,7 +12,7 @@ const consumer = kafka.consumer({
 });
 
 const recordEvent = async (topic, payload) => {
-  const { orderId, customerId, agentId, status, createdAt, updatedAt } = payload;
+  const { orderId, customerId, agentId, status, createdAt, updatedAt, requestId } = payload;
 
   await OrderEvent.create({
     orderId,
@@ -22,7 +23,7 @@ const recordEvent = async (topic, payload) => {
     occurredAt: new Date(updatedAt || createdAt || Date.now()),
   });
 
-  console.log(`[analytics] Recorded event: ${topic} → order ${orderId} (${status || 'CREATED'})`);
+  console.log(`[analytics] x-request-id:${requestId || 'n/a'} recorded: ${topic} → order ${orderId} (${status || 'CREATED'})`);
 };
 
 const startConsumer = async () => {
@@ -39,6 +40,7 @@ const startConsumer = async () => {
       try {
         const payload = JSON.parse(message.value.toString());
         await recordEvent(topic, payload);
+        kafkaMessagesProcessedTotal.inc({ topic, service: 'analytics-service' });
       } catch (err) {
         console.error(`[analytics] Failed to process message on ${topic}:`, err.message);
       }

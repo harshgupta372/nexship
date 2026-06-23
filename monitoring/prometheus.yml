@@ -1,0 +1,28 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'gateway'
+    static_configs:
+      - targets: ['gateway:3000']
+
+  - job_name: 'auth-service'
+    static_configs:
+      - targets: ['auth-service:3001']
+
+  - job_name: 'order-service'
+    static_configs:
+      - targets: ['order-service:3002']
+
+  - job_name: 'tracking-service'
+    static_configs:
+      - targets: ['tracking-service:3003']
+
+  - job_name: 'notification-service'
+    static_configs:
+      - targets: ['notification-service:3004']
+
+  - job_name: 'analytics-service'
+    static_configs:
+      - targets: ['analytics-service:3005']

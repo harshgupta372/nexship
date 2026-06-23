@@ -8,10 +8,37 @@ pipeline {
     SSH_KEY               = credentials('deploy-ssh-key')
     DEPLOY_HOST           = credentials('deploy-host')
     IMAGE_TAG             = "${env.BUILD_NUMBER}"
+    // Cache mongodb-memory-server binary between Jenkins runs
+    MONGOMS_DOWNLOAD_DIR  = "${env.WORKSPACE}/.mongo-binaries"
   }
 
   stages {
 
+    // ── 1. TEST ───────────────────────────────────────────────────────────────
+    // Run tests BEFORE building images — fail fast, don't waste build time.
+    // Only auth-service and order-service have Jest suites right now.
+    // Add a service here when its tests are written.
+    stage('Test') {
+      steps {
+        script {
+          def tested = ['auth-service', 'order-service']
+          tested.each { svc ->
+            dir("services/${svc}") {
+              sh 'npm ci'
+              sh 'NODE_ENV=test JWT_ACCESS_SECRET=ci-access-secret JWT_REFRESH_SECRET=ci-refresh-secret npm test -- --forceExit --ci'
+            }
+          }
+        }
+      }
+      post {
+        failure {
+          error "Tests failed — deploy blocked. Fix failing tests before merging."
+        }
+      }
+    }
+
+    // ── 2. BUILD ──────────────────────────────────────────────────────────────
+    // Only reached if all tests passed.
     stage('Build') {
       steps {
         script {
@@ -24,27 +51,7 @@ pipeline {
       }
     }
 
-    stage('Test') {
-      steps {
-        script {
-          def services = ['auth-service', 'order-service', 'tracking-service', 'notification-service', 'analytics-service']
-          services.each { svc ->
-            sh """
-              docker run --rm \
-                -e NODE_ENV=test \
-                ${DOCKERHUB_USER}/nexship-${svc}:${IMAGE_TAG} \
-                npm test -- --coverage --forceExit
-            """
-          }
-        }
-      }
-      post {
-        failure {
-          error "Tests failed — aborting pipeline"
-        }
-      }
-    }
-
+    // ── 3. PUSH ───────────────────────────────────────────────────────────────
     stage('Push') {
       steps {
         sh "echo ${DOCKERHUB_CREDENTIALS_PSW} | docker login -u ${DOCKERHUB_USER} --password-stdin"
@@ -59,6 +66,7 @@ pipeline {
       }
     }
 
+    // ── 4. DEPLOY ─────────────────────────────────────────────────────────────
     stage('Deploy') {
       steps {
         sh """
@@ -75,13 +83,13 @@ pipeline {
 
   post {
     always {
-      sh "docker logout"
+      sh "docker logout || true"
     }
     success {
-      echo "NexShip deployment successful — build #${IMAGE_TAG}"
+      echo "NexShip deployed — build #${IMAGE_TAG}"
     }
     failure {
-      echo "Pipeline failed — check logs above"
+      echo "Pipeline failed — check stage logs above"
     }
   }
 }

@@ -1,16 +1,42 @@
 require('dotenv').config();
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
+const { v4: uuidv4 } = require('uuid');
 const authenticate = require('./src/middleware/auth');
+const { register, httpRequestsTotal, httpRequestDurationSeconds } = require('./src/metrics');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ─── Request ID ──────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  const requestId = req.headers['x-request-id'] || uuidv4();
+  req.headers['x-request-id'] = requestId;
+  res.setHeader('x-request-id', requestId);
+  console.log(`[gateway] ${req.method} ${req.path} x-request-id:${requestId}`);
+  next();
+});
+
+// ─── HTTP Metrics ─────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = (Date.now() - start) / 1000;
+    httpRequestsTotal.inc({ method: req.method, route: req.path, status: res.statusCode, service: 'gateway' });
+    httpRequestDurationSeconds.observe({ method: req.method, route: req.path, service: 'gateway' }, duration);
+  });
+  next();
+});
+
 // ─── JWT Auth ────────────────────────────────────────────────────────────────
 app.use(authenticate);
 
-// ─── Health Check ────────────────────────────────────────────────────────────
+// ─── Health + Metrics ────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'gateway' }));
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
+});
 
 // ─── Service Route Map ───────────────────────────────────────────────────────
 // All services communicate ONLY through this gateway — no direct service calls
@@ -36,12 +62,9 @@ routes.forEach(({ prefix, target }) => {
           res.status(502).json({ message: 'Upstream service unavailable' });
         },
         proxyReq: (proxyReq, req) => {
-          if (req.headers['x-user-id']) {
-            proxyReq.setHeader('x-user-id', req.headers['x-user-id']);
-          }
-          if (req.headers['x-user-role']) {
-            proxyReq.setHeader('x-user-role', req.headers['x-user-role']);
-          }
+          if (req.headers['x-user-id'])     proxyReq.setHeader('x-user-id', req.headers['x-user-id']);
+          if (req.headers['x-user-role'])   proxyReq.setHeader('x-user-role', req.headers['x-user-role']);
+          if (req.headers['x-request-id'])  proxyReq.setHeader('x-request-id', req.headers['x-request-id']);
         },
       },
     })

@@ -1,10 +1,41 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
+const { authLoginsTotal, authRegistrationsTotal } = require('../metrics');
 
 const router = express.Router();
+
+// ─── Rate Limiters ───────────────────────────────────────────────────────────
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test',
+  message: { message: 'Too many login attempts, please try again after 15 minutes' },
+});
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test',
+  message: { message: 'Too many accounts created from this IP, please try again after an hour' },
+});
+
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test',
+  message: { message: 'Too many refresh attempts, please try again later' },
+});
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -12,7 +43,7 @@ const generateAccessToken = (payload) =>
   jwt.sign(payload, process.env.JWT_ACCESS_SECRET, { expiresIn: '15m' });
 
 const generateRefreshToken = (payload) =>
-  jwt.sign(payload, process.env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
+  jwt.sign({ ...payload, jti: Date.now().toString() }, process.env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
 
 const handleValidation = (req, res) => {
   const errors = validationResult(req);
@@ -27,6 +58,7 @@ const handleValidation = (req, res) => {
 
 router.post(
   '/register',
+  registerLimiter,
   [
     body('name').trim().notEmpty().withMessage('Name is required'),
     body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
@@ -51,6 +83,7 @@ router.post(
 
       const hashedPassword = await bcrypt.hash(password, 12);
       const user = await User.create({ name, email, hashedPassword, role });
+      authRegistrationsTotal.inc();
       console.log(`[register] New user created — id: ${user._id}, email: ${user.email}, role: ${user.role}`);
 
       return res.status(201).json({
@@ -68,6 +101,7 @@ router.post(
 
 router.post(
   '/login',
+  loginLimiter,
   [
     body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
     body('password').notEmpty().withMessage('Password is required'),
@@ -82,14 +116,17 @@ router.post(
       // Use the same generic message for both "not found" and "wrong password"
       // to prevent user enumeration attacks
       if (!user) {
+        authLoginsTotal.inc({ result: 'failure' });
         return res.status(401).json({ message: 'Invalid credentials' });
       }
 
       const isMatch = await bcrypt.compare(password, user.hashedPassword);
       if (!isMatch) {
+        authLoginsTotal.inc({ result: 'failure' });
         return res.status(401).json({ message: 'Invalid credentials' });
       }
 
+      authLoginsTotal.inc({ result: 'success' });
       console.log(`[login] User authenticated — id: ${user._id}, email: ${user.email}, role: ${user.role}`);
       const payload = { userId: user._id, role: user.role };
       const accessToken = generateAccessToken(payload);
@@ -112,7 +149,7 @@ router.post(
 
 // ─── POST /auth/refresh ──────────────────────────────────────────────────────
 
-router.post('/refresh', async (req, res) => {
+router.post('/refresh', refreshLimiter, async (req, res) => {
   const { refreshToken } = req.body;
 
   if (!refreshToken) {

@@ -1,5 +1,6 @@
 const { Kafka } = require('kafkajs');
 const Tracking = require('../models/Tracking');
+const { kafkaMessagesProcessedTotal } = require('../metrics');
 
 const kafka = new Kafka({
   clientId: 'tracking-service',
@@ -11,7 +12,7 @@ const consumer = kafka.consumer({
 });
 
 const handleOrderCreated = async (payload) => {
-  const { orderId, customerId, createdAt } = payload;
+  const { orderId, customerId, createdAt, requestId } = payload;
 
   // Upsert — safe to re-process if Kafka delivers the message twice
   await Tracking.findOneAndUpdate(
@@ -25,11 +26,11 @@ const handleOrderCreated = async (payload) => {
     { upsert: true }
   );
 
-  console.log(`[tracking] Order created: ${orderId}`);
+  console.log(`[tracking] x-request-id:${requestId || 'n/a'} order created: ${orderId}`);
 };
 
 const handleStatusUpdated = async (payload) => {
-  const { orderId, status, note, updatedBy, updatedAt } = payload;
+  const { orderId, status, note, updatedBy, updatedAt, requestId } = payload;
 
   await Tracking.findOneAndUpdate(
     { orderId },
@@ -41,7 +42,7 @@ const handleStatusUpdated = async (payload) => {
     }
   );
 
-  console.log(`[tracking] Order ${orderId} → ${status}`);
+  console.log(`[tracking] x-request-id:${requestId || 'n/a'} order ${orderId} → ${status}`);
 };
 
 const HANDLERS = {
@@ -63,7 +64,10 @@ const startConsumer = async () => {
       try {
         const payload = JSON.parse(message.value.toString());
         const handler = HANDLERS[topic];
-        if (handler) await handler(payload);
+        if (handler) {
+          await handler(payload);
+          kafkaMessagesProcessedTotal.inc({ topic, service: 'tracking-service' });
+        }
       } catch (err) {
         console.error(`[tracking] Failed to process message on ${topic}:`, err.message);
       }

@@ -2,6 +2,7 @@ const { Kafka } = require('kafkajs');
 const { sendMail } = require('../mailer/transporter');
 const { getTemplate } = require('../mailer/templates');
 const NotificationLog = require('../models/NotificationLog');
+const { kafkaMessagesProcessedTotal } = require('../metrics');
 
 const kafka = new Kafka({
   clientId: 'notification-service',
@@ -67,6 +68,7 @@ const startConsumer = async () => {
       try {
         const payload = JSON.parse(message.value.toString());
         await processEvent(topic, payload);
+        kafkaMessagesProcessedTotal.inc({ topic, service: 'notification-service' });
       } catch (err) {
         console.error(`[notification] Failed to process message on ${topic}:`, err.message);
       }

@@ -3,6 +3,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const analyticsRoutes = require('./src/routes/analytics');
 const { startConsumer } = require('./src/kafka/consumer');
+const { register } = require('./src/metrics');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -10,6 +11,10 @@ const PORT = process.env.PORT || 3005;
 app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'analytics-service' }));
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
+});
 
 app.use('/analytics', analyticsRoutes);
 

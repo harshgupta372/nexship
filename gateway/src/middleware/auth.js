@@ -6,6 +6,7 @@ const PUBLIC_PATHS = new Set([
   'POST:/auth/login',
   'POST:/auth/refresh',
   'GET:/health',
+  'GET:/metrics',
 ]);
 
 /**

@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const Order = require('../models/Order');
 const { publishEvent } = require('../kafka/producer');
+const { ordersCreatedTotal, ordersStatusUpdatedTotal, agentsAssignedTotal } = require('../metrics');
 
 const router = express.Router();
 
@@ -45,6 +46,7 @@ router.post(
 
     const userId = req.headers['x-user-id'];
     const userRole = req.headers['x-user-role'];
+    const requestId = req.headers['x-request-id'];
 
     // Only customers can place orders
     if (userRole !== 'CUSTOMER') {
@@ -69,8 +71,11 @@ router.post(
         origin: order.origin,
         destination: order.destination,
         createdAt: order.createdAt,
+        requestId,
       });
 
+      ordersCreatedTotal.inc();
+      console.log(`[order-service] x-request-id:${requestId} order created: ${order._id}`);
       return res.status(201).json({ message: 'Order created successfully', order });
     } catch (err) {
       console.error('[POST /orders]', err.message);
@@ -136,6 +141,7 @@ router.patch(
 
     const userId = req.headers['x-user-id'];
     const userRole = req.headers['x-user-role'];
+    const requestId = req.headers['x-request-id'];
 
     if (userRole === 'CUSTOMER') {
       return res.status(403).json({ message: 'Customers cannot update order status' });
@@ -174,8 +180,10 @@ router.patch(
         note: note || '',
         updatedBy: userId,
         updatedAt: new Date(),
+        requestId,
       });
 
+      ordersStatusUpdatedTotal.inc({ status });
       return res.json({ message: 'Order status updated', order });
     } catch (err) {
       console.error('[PATCH /orders/:id/status]', err.message);
@@ -235,6 +243,7 @@ router.patch(
         updatedAt:     new Date(),
       });
 
+      agentsAssignedTotal.inc();
       return res.json({ message: 'Agent assigned successfully', order });
     } catch (err) {
       console.error('[PATCH /orders/:id/assign]', err.message);

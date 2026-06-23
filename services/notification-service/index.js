@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const { startConsumer } = require('./src/kafka/consumer');
+const { register } = require('./src/metrics');
 
 const app = express();
 const PORT = process.env.PORT || 3004;
@@ -9,6 +10,10 @@ const PORT = process.env.PORT || 3004;
 app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'notification-service' }));
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
+});
 
 // Expose notification logs so admin can audit what was sent
 app.get('/notifications/:orderId', async (req, res) => {
